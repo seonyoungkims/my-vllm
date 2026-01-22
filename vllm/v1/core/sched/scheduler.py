@@ -55,6 +55,7 @@ from vllm.v1.utils import record_function_or_nullcontext
 
 logger = init_logger(__name__)
 
+import os
 
 class Scheduler(SchedulerInterface):
     def __init__(
@@ -212,6 +213,21 @@ class Scheduler(SchedulerInterface):
         )
         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
         self.use_v2_model_runner = envs.VLLM_USE_V2_MODEL_RUNNER
+        
+        self.iteration_count = 0
+
+        self.log_file_path = f"batch_log_{time.strftime('%Y-%m-%d %H:%M:%S')}.txt"
+        self.log_file = open(self.log_file_path, "w", encoding="utf-8")
+        
+        self.log_file.write(f"--- Experiment Started: {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        self.log_file.flush()
+        
+        self.use_static_batching = os.getenv("VLLM_STATIC_BATCHING", "0") == "1" # Implement a configuration flag to toggle between static and continuous batching.
+        if self.use_static_batching:
+            logger.info("Running in STATIC BATCHING mode (Size: %d)", 
+                        self.max_num_running_reqs)
+        else:
+            logger.info("Running in CONTINUOUS BATCHING mode (Default)")
 
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
@@ -754,6 +770,17 @@ class Scheduler(SchedulerInterface):
 
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
+        
+        current_request_ids = [req.request_id for req in self.running]
+        
+        log_entry = (f"[BATCH_LOG] Iteration: {self.iteration_count}, "
+                     f"Batch Size: {len(current_request_ids)}, "
+                     f"IDs: {current_request_ids}\n")
+        self.iteration_count += 1
+
+        self.log_file.write(log_entry)
+        self.log_file.flush()
+    
         return scheduler_output
 
     def _preempt_request(
